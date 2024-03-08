@@ -658,7 +658,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
 
   for(a <- 0 until TageNTables) {
     tageTable(a).io.update.pc          := RegNext(updateIn.pc) // RegEnable(updateIn.pc, updateBrJmpValid)
-    tageTable(a).io.update.foldedHist := RegNext(updateGHhis) 
+    tageTable(a).io.update.foldedHist  := RegNext(updateGHhis)
     tageTable(a).io.update.ghist       := RegNext(updateIn.ghist)
     tageTable(a).io.update.mask(0)     := RegNext(updateMask(a))
 
