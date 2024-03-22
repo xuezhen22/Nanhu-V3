@@ -284,7 +284,7 @@ class TageTable
   }
  
   val associating = 4
-  val associSetNum = nRowsPerBr / associating
+  val associSetNum = bankSize / associating
   val us = Module(new SRAMTemplate(Bool(),
     set=associSetNum, way=associating,
     shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
