@@ -284,6 +284,7 @@ class TageTable
   }
  
   val associating = 4
+  // val associSetNum = nRowsPerBr / associating
   val associSetNum = bankSize / associating
   val us = Module(new SRAMTemplate(Bool(),
     set=associSetNum, way=associating,
@@ -295,7 +296,7 @@ class TageTable
   us.extra_reset.get := io.update.reset_u.reduce(_||_)
 
   val tableBanks = Seq.tabulate(nBanks)(idx =>
-    Module(new FoldedSRAMTemplate(new TageEntry,
+    Module(new SRAMTemplate(new TageEntry,
       set=associSetNum, way=associating,
       shouldReset=true, holdRead=true, singlePort=true,
       hasMbist = coreParams.hasMbist,
