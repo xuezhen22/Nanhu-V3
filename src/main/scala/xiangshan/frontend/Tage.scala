@@ -239,6 +239,7 @@ class TageTable
   require(isPow2(numBr))
   val nRowsPerBr = nRows / numBr
   val bankSize = nRowsPerBr / nBanks
+  val uFoldedWidth = nRowsPerBr / SRAM_SIZE
   val bankFoldWidth = if (bankSize >= SRAM_SIZE) bankSize / SRAM_SIZE else 1
   val perBankWrbypassEntries = 8
   if (bankSize < SRAM_SIZE) {
@@ -264,14 +265,14 @@ class TageTable
   }
   def incCtr(ctr: UInt, taken: Bool): UInt = satUpdate(ctr, TageCtrBits, taken)
   def getUnhashedIdx(pc: UInt): UInt = pc >> instOffsetBits
-  def getAllocWayIdx(valids: UInt, setIdx: UInt) = {
-    val allocWayIdx = WireDefault(0.U(log2Ceil(associating).W))
-    if(associating > 1) {
-      val isValid = valids.andR
-      allocWayIdx := Mux(isValid, replacer.way(setIdx), PriorityEncoder(~valids))
-    }
-    allocWayIdx
-  }
+  // def getAllocWayIdx(valids: UInt, setIdx: UInt) = {
+  //   val allocWayIdx = WireDefault(0.U(log2Ceil(associating).W))
+  //   if(associating > 1) {
+  //     val isValid = valids.andR
+  //     allocWayIdx := Mux(isValid, replacer.way(setIdx), PriorityEncoder(~valids))
+  //   }
+  //   allocWayIdx
+  // }
   def silentUpdate(ctr: UInt, taken: Bool) = {
     ctr.andR && taken || !ctr.orR && !taken
   }
@@ -283,11 +284,17 @@ class TageTable
       p" ghist: ${Binary(idx_history)}, fh: ${Binary(idx_fh.folded_hist)}\n")
   }
  
-  val associating = 4
+  // val associating = 4
   // val associSetNum = nRowsPerBr / associating
-  val associSetNum = bankSize / associating
-  val us = Module(new SRAMTemplate(Bool(),
-    set=associSetNum, way=associating,
+  // val associSetNum = bankSize / associating
+  // val us = Module(new SRAMTemplate(Bool(),
+  //   set=associSetNum, way=associating,
+  //   shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
+  //   hasMbist = coreParams.hasMbist,
+  //   hasShareBus = coreParams.hasShareBus,
+  //   parentName = parentName + "us_"
+  // ))
+  val us = Module(new FoldedSRAMTemplate(Bool(), set=nRowsPerBr, width=uFoldedWidth, way=numBr,
     shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
     hasMbist = coreParams.hasMbist,
     hasShareBus = coreParams.hasShareBus,
@@ -295,9 +302,16 @@ class TageTable
   ))
   us.extra_reset.get := io.update.reset_u.reduce(_||_)
 
-  val tableBanks = Seq.tabulate(nBanks)(idx =>
-    Module(new SRAMTemplate(new TageEntry,
-      set=associSetNum, way=associating,
+  // val tableBanks = Seq.tabulate(nBanks)(idx =>
+  //   Module(new SRAMTemplate(new TageEntry,
+  //     set=associSetNum, way=associating,
+  //     shouldReset=true, holdRead=true, singlePort=true,
+  //     hasMbist = coreParams.hasMbist,
+  //     hasShareBus = coreParams.hasShareBus,
+  //     parentName = parentName + s"table${idx}_"
+  //   )))
+   val tableBanks = Seq.tabulate(nBanks)(idx =>
+    Module(new FoldedSRAMTemplate(new TageEntry, set=bankSize, width=bankFoldWidth, way=numBr,
       shouldReset=true, holdRead=true, singlePort=true,
       hasMbist = coreParams.hasMbist,
       hasShareBus = coreParams.hasShareBus,
@@ -310,7 +324,7 @@ class TageTable
     None
   }
 
-  val replacer = ReplacementPolicy.fromString(Some("setplru"), 4, associSetNum)
+  // val replacer = ReplacementPolicy.fromString(Some("setplru"), 4, associSetNum)
 
   // read
   val reqUnhashedIdx       = getUnhashedIdx(io.req.bits.pc)
@@ -330,10 +344,11 @@ class TageTable
   val respInvalidByWrite = Wire(Bool())
   respInvalidByWrite := Mux1H(s1Bank1h, s1ReadWrite)
   
-  val reqTageData = tableBanks.map(_.io.r.resp.data)
+  val reqTageData      = tableBanks.map(_.io.r.resp.data)
   val tablesBankValids = reqTageData.map(bank => VecInit(bank.map(_.valid)))
-  val unconfs = reqTageData.map(r => VecInit(r.map(e => WireInit(unconf(e.ctr)))))
-  val hits = reqTageData.map(r => VecInit(r.map(e => e.tag === s1Tag && e.valid && !respInvalidByWrite)))
+  val unconfs          = reqTageData.map(r => VecInit(r.map(e => WireInit(unconf(e.ctr)))))
+  val hits             = reqTageData.map(r =>
+    VecInit(r.map(e => e.tag === s1Tag && e.valid && !respInvalidByWrite)))
   
   val setRespVec   = Mux1H(s1Bank1h, reqTageData)
   val setUnconfVec = Mux1H(s1Bank1h, unconfs)
@@ -341,11 +356,16 @@ class TageTable
   val isS1Hit      = setHitsVec.reduce(_||_)
   val s1HitWayIdx  = PriorityEncoder(setHitsVec)
 
-    io.resp.valid       := isS1Hit
-    io.resp.bits.ctr    := setRespVec(s1HitWayIdx).ctr
-    io.resp.bits.u      := us.io.r.resp.data(s1HitWayIdx)
-    io.resp.bits.unconf := setUnconfVec(s1HitWayIdx)
-    io.resp.bits.wayIdx := s1HitWayIdx
+  // io.resp.valid       := isS1Hit
+  // io.resp.bits.ctr    := setRespVec(s1HitWayIdx).ctr
+  // io.resp.bits.u      := us.io.r.resp.data(s1HitWayIdx)
+  // io.resp.bits.unconf := setUnconfVec(s1HitWayIdx)
+  // io.resp.bits.wayIdx := s1HitWayIdx
+  io.resp.valid       := isS1Hit
+  io.resp.bits.ctr    := setRespVec(0).ctr
+  io.resp.bits.u      := us.io.r.resp.data(0)
+  io.resp.bits.unconf := setUnconfVec(0)
+  io.resp.bits.wayIdx := 0.U
 
   if (EnableGHistDiff) {
     val update_idx_history = compute_folded_ghist(io.update.ghist, log2Ceil(nRowsPerBr))
@@ -361,14 +381,14 @@ class TageTable
   val (updtIdx, updtTag) = getHashedIdxTag(updtUnhashedIdx, io.update.foldedHist)
   val updtBank1h         = getBankMask(updtIdx)
   val updtBankIdx        = getBankIdx(updtIdx)
-  val writeWayIdx  = Mux(io.update.alloc(0), replacer.way(updtIdx), io.update.wayIdx)
-  val writeWayMask = UIntToOH(writeWayIdx, associating)
-  val touchSetIdx  = Seq.fill(1)(Wire(UInt(log2Ceil(associSetNum).W)))
-  val touchWayIdx  = Seq.fill(1)(Wire(Valid(UInt(2.W))))
-  touchSetIdx(0)       := Mux(io.update.mask(0), updtIdx, s1Idx)
-  touchWayIdx(0).valid := io.update.mask(0) || (RegNext(io.req.fire) && isS1Hit) || io.update.alloc(0)
-  touchWayIdx(0).bits  := Mux(io.update.alloc(0) || io.update.mask(0), writeWayIdx, s1HitWayIdx)
-  replacer.access(touchSetIdx, touchWayIdx)
+  val writeWayIdx  = 0.U //Mux(io.update.alloc(0), replacer.way(updtIdx), io.update.wayIdx)
+  // val writeWayMask = UIntToOH(writeWayIdx, associating)
+  // val touchSetIdx  = Seq.fill(1)(Wire(UInt(log2Ceil(associSetNum).W)))
+  // val touchWayIdx  = Seq.fill(1)(Wire(Valid(UInt(2.W))))
+  // touchSetIdx(0)       := Mux(io.update.mask(0), updtIdx, s1Idx)
+  // touchWayIdx(0).valid := io.update.mask(0) || (RegNext(io.req.fire) && isS1Hit) || io.update.alloc(0)
+  // touchWayIdx(0).bits  := Mux(io.update.alloc(0) || io.update.mask(0), writeWayIdx, s1HitWayIdx)
+  // replacer.access(touchSetIdx, touchWayIdx)
   
   val notSilentUpdate = Wire(Vec(nBanks, Bool()))
   val updteWayMask = VecInit((0 until nBanks).map(a =>
@@ -396,13 +416,17 @@ class TageTable
   // write
   for (b <- 0 until nBanks) {
     tableBanks(b).io.w.apply(
+      // valid   = updteWayMask(b) && updtBank1h(b),
+      // data    = updtBanksWdata(b),
+      // setIdx  = updtBankIdx,
+      // waymask = writeWayMask
       valid   = updteWayMask(b) && updtBank1h(b),
       data    = updtBanksWdata(b),
       setIdx  = updtBankIdx,
-      waymask = writeWayMask
+      waymask = 1.U
     )
   }
-  us.io.w.apply(io.update.uMask(0), io.update.us(0), updtIdx, writeWayMask)
+  us.io.w.apply(io.update.uMask(0), io.update.us(0), updtIdx, 1.U) //writeWayMask)
 
   val powerOnResetState = RegInit(true.B)
   when(us.io.r.req.ready && tableBanks.map(_.io.r.req.ready).reduce(_ && _)) {
@@ -489,17 +513,17 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
  val tageTable = TageTableInfos.zipWithIndex.map {
     case ((nRows, histLen, tagLen), i) => {
       val t = Module(new TageTable(nRows, histLen, tagLen, i, parentName = parentName + s"tagtable${i}_"))
-      t.io.req.valid := io.s0_fire(1)
-      t.io.req.bits.pc := s0_pc_dup(1)
+      t.io.req.valid           := io.s0_fire(1)
+      t.io.req.bits.pc         := s0_pc_dup(1)
       t.io.req.bits.foldedHist := io.in.bits.folded_hist(1)
-      t.io.req.bits.ghist := io.in.bits.ghist
+      t.io.req.bits.ghist      := io.in.bits.ghist
       t
     }
   }
 
   val bt = Module (new TageBTable(parentName = parentName + "bttable_"))
   bt.io.req.valid := io.s0_fire(1)
-  bt.io.req.bits := s0_pc_dup(1)
+  bt.io.req.bits  := s0_pc_dup(1)
 
   val altCounters = RegInit(VecInit(
     Seq.fill(altCtrsNum)((1 << (alterCtrBits-1)).U(alterCtrBits.W))))
@@ -538,7 +562,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // meta
   val s1AllocMask  = VecInit(s1RespVec.map(resp => !resp.valid && !resp.bits.u)).asUInt &
     ~(LowerMask(UIntToOH(s1ProvideIdx, TageNTables)) & Fill(TageNTables, s1Provide.asUInt))
-  val s1altDiffer  = s1BaseCtr(1) =/= s1Resp.ctr(TageCtrBits - 1)
+  val s1altDiffer  = s1BaseCtr(1) =/= s1PredTaken // s1Resp.ctr(TageCtrBits - 1)
   val s1UseAltOnNa = predAltCtr(alterCtrBits - 1) && s1Resp.unconf
   val s1HitWayIdx  = s1Resp.wayIdx
 
@@ -583,9 +607,9 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val updateIn      = io.update(0).bits
   val updateMeta    = (io.update(0).bits.meta).asTypeOf(new TageMeta)
   val updateMispred = updateIn.mispred_mask(0)
-  val updateTaken   = updateIn.br_taken_mask(0)
   val updateBrJmpValid = updateValid && updateIn.ftb_entry.brValids(0) &&
                          !updateIn.ftb_entry.always_taken(0)
+  val updateTaken      = updateBrJmpValid && updateIn.br_taken_mask(0)
   val updateGHhis      = updateIn.spec_info.folded_hist
   val updateProvide    = updateMeta.providers(0).valid
   val updateProvideIdx = updateMeta.providers(0).bits
@@ -599,8 +623,11 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // allocate
   val isTageAllocate = updateBrJmpValid && updateMispred &&
                        !(updateProvide && updateTagePredCorrect && updateMeta.altUsed(0))
-  val canAllocate = updateMeta.allocates(0)
+  // val canAllocate = updateMeta.allocates(0)
   val allocRandomMask = LFSR64()(TageNTables - 1, 0)
+  val longerHistoryTableMask = ~(LowerMask(UIntToOH(updateProvideIdx), TageNTables) &
+                                 Fill(TageNTables, updateProvideIdx.asUInt))
+  val canAllocate = updateMeta.allocates(0) & longerHistoryTableMask
   val allocTableMask = canAllocate & allocRandomMask
   val allocateIdx = Mux(canAllocate(PriorityEncoder(allocTableMask)),
                     PriorityEncoder(allocTableMask), PriorityEncoder(canAllocate))
@@ -608,7 +635,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // tick
   val tickCnt = RegInit(0.U(TickWidth.W))
   val tickTopDistance = RegInit(TickMax)
-  val notAllocate = ~canAllocate
+  val notAllocate = ~canAllocate & longerHistoryTableMask
   val tickIsInc = PopCount(canAllocate) < PopCount(notAllocate)
   val tickIsDec = PopCount(canAllocate) > PopCount(notAllocate)
   val tickIncVal = PopCount(notAllocate) - PopCount(canAllocate)
@@ -619,41 +646,45 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
 
   // update
   when(updateBrJmpValid && updateProvide) {
-    updateMask(updateProvideIdx)      := true.B
-    updateOldCtrIn(updateProvideIdx)  := updateMeta.providerResps(0).ctr
-    updateIsUsIn(updateProvideIdx)    := updateTagePredCorrect
-    updateTageTaken(updateProvideIdx) := updateTaken && updateBrJmpValid
-    updateUMask(updateProvideIdx)     := updateMeta.altDiffers(0)
+    updateMask(updateProvideIdx)        := true.B
+    updateOldCtrIn(updateProvideIdx)    := updateMeta.providerResps(0).ctr
+    updateIsUsIn(updateProvideIdx)      := updateTagePredCorrect
+    updateTageTaken(updateProvideIdx)   := updateTaken
+    updateUMask(updateProvideIdx)       := updateMeta.altDiffers(0)
+    updateAllocMaskIn(updateProvideIdx) := false.B
   }
   
   // allocate
   when(isTageAllocate && canAllocate.orR) {
     updateMask(allocateIdx)        := true.B
     updateAllocMaskIn(allocateIdx) := true.B
-    updateTageTaken(allocateIdx)   := updateTaken && updateBrJmpValid
+    updateTageTaken(allocateIdx)   := updateTaken
     updateUMask(allocateIdx)       := true.B
+    updateIsUsIn(allocateIdx)      := false.B
   }
 
   // tick
-  when(tickCnt === TickMax) {
-    tickCnt := 0.U
-    tickTopDistance := TickMax
-    tickCntReset := true.B
-  }.elsewhen(tickIsInc) {
-    when(tickSetToMax) {
-      tickCnt := TickMax
-      tickTopDistance := 0.U
-    }.otherwise {
-      tickCnt := tickCnt + tickIncVal
-      tickTopDistance := tickTopDistance - tickIncVal
-    }
-  }.elsewhen(tickIsDec) {
-    when(tickSetToMin) {
+  when(isTageAllocate) {
+    when(tickCnt === TickMax) {
       tickCnt := 0.U
       tickTopDistance := TickMax
-    }.otherwise {
-      tickCnt := tickCnt - tickDecVal
-      tickTopDistance := tickTopDistance + tickDecVal
+      tickCntReset := true.B
+    }.elsewhen(tickIsInc) {
+      when(tickSetToMax) {
+        tickCnt := TickMax
+        tickTopDistance := 0.U
+      }.otherwise {
+        tickCnt := tickCnt + tickIncVal
+        tickTopDistance := tickTopDistance - tickIncVal
+      }
+    }.elsewhen(tickIsDec) {
+      when(tickSetToMin) {
+        tickCnt := 0.U
+        tickTopDistance := TickMax
+      }.otherwise {
+        tickCnt := tickCnt - tickDecVal
+        tickTopDistance := tickTopDistance + tickDecVal
+      }
     }
   }
 
@@ -662,7 +693,6 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
     tageTable(a).io.update.foldedHist  := RegNext(updateGHhis)
     tageTable(a).io.update.ghist       := RegNext(updateIn.ghist)
     tageTable(a).io.update.mask(0)     := RegNext(updateMask(a))
-
     tageTable(a).io.update.takens(0)   := RegNext(updateTageTaken(a)) 
     tageTable(a).io.update.alloc(0)    := RegNext(updateAllocMaskIn(a)) 
     tageTable(a).io.update.oldCtrs(0)  := RegNext(updateOldCtrIn(a)) 
@@ -674,7 +704,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   bt.io.updateMask(0)   := RegNext(updateBrJmpValid && updateMeta.altUsed(0))
   bt.io.updateCnt(0)    := RegNext(updateMeta.basecnts(0))
   bt.io.updatePC        := RegNext(updateIn.pc)
-  bt.io.updateTakens(0) := RegNext(updateTaken && updateBrJmpValid)
+  bt.io.updateTakens(0) := RegNext(updateTaken)
 
   io.s1_ready := tageTable.map(_.io.req.ready).reduce(_&&_) && bt.io.req.ready 
 
@@ -684,7 +714,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val updateAltIdx = useAltIdx(updateIn.pc)
   val updateOldAltCtr = Mux1H( UIntToOH(updateAltIdx, altCtrsNum), altCounters )
   val updateAltPred = updateMeta.altPreds(0)
-  val updateAltCorrect = (updateAltPred === (updateBrJmpValid && updateTaken))
+  val updateAltCorrect = (updateAltPred === updateTaken)
   when(updateBrJmpValid && updateProvide && updateProvideWeak && updateAltDiff) {
     val newCnt = updateCtr(updateOldAltCtr, alterCtrBits, updateAltCorrect)
     altCounters(updateAltIdx) := newCnt
