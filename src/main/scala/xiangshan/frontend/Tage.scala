@@ -98,7 +98,6 @@ class TageResp(implicit p: Parameters) extends TageBundle {
   val ctr = UInt(TageCtrBits.W)
   val u = Bool()
   val unconf = Bool()
-  val wayIdx = UInt(2.W)
 }
 
 class TageUpdate(implicit p: Parameters) extends TageBundle {
@@ -110,7 +109,6 @@ class TageUpdate(implicit p: Parameters) extends TageBundle {
   val takens = Vec(numBr, Bool())
   val alloc = Vec(numBr, Bool())
   val oldCtrs = Vec(numBr, UInt(TageCtrBits.W))
-  val wayIdx = UInt(2.W)
   // update u
   val uMask = Vec(numBr, Bool())
   val us = Vec(numBr, Bool())
@@ -143,24 +141,134 @@ trait TBTParams extends HasXSParameter with TageParams {
 }
 
 
+// class TageBTable(parentName:String = "Unknown")(implicit p: Parameters) extends XSModule with TBTParams{
+//   val io = IO(new Bundle {
+//     //#2410
+//     // val s0_fire = Input(Bool())
+//     // val s0_pc   = Input(UInt(VAddrBits.W))
+//     //#2410
+//     val req = Flipped(DecoupledIO(UInt(VAddrBits.W))) // s0_pc
+//     val s1_cnt     = Output(Vec(numBr,UInt(2.W)))
+//     val update_mask = Input(Vec(TageBanks, Bool()))
+//     val update_pc = Input(UInt(VAddrBits.W))
+//     val update_cnt  = Input(Vec(numBr,UInt(2.W)))
+//     val update_takens = Input(Vec(TageBanks, Bool()))
+//    // val update  = Input(new TageUpdate)
+//   })
+
+//   val bimAddr = new TableAddr(log2Up(BtSize), instOffsetBits)
+
+//   val bt = Module(new SRAMTemplate(UInt(2.W), set = BtSize, way=numBr, shouldReset = true, holdRead = true, bypassWrite = true,
+//     hasMbist = coreParams.hasMbist,
+//     hasShareBus = coreParams.hasShareBus,
+//     parentName = parentName
+//   ))
+//   val mbistPipeline = if(coreParams.hasMbist && coreParams.hasShareBus) {
+//     MBISTPipeline.PlaceMbistPipeline(1, s"${parentName}_mbistPipe", true)
+//   } else {
+//     None
+//   }
+
+//   val doing_reset = RegInit(true.B)
+//   val resetRow = RegInit(0.U(log2Ceil(BtSize).W))
+//   resetRow := resetRow + doing_reset
+//   when (resetRow === (BtSize-1).U) { doing_reset := false.B }
+
+//   //#2410
+//   io.req.ready := !doing_reset
+//   // val s0_idx = bimAddr.getIdx(io.s0_pc)
+//   // bt.io.r.req.valid := io.s0_fire
+//   val s0_pc = io.req.bits
+//   val s0_fire = io.req.valid
+//   val s0_idx = bimAddr.getIdx(s0_pc)
+//   bt.io.r.req.valid := s0_fire
+//   bt.io.r.req.bits.setIdx := s0_idx
+
+//   val s1_read = bt.io.r.resp.data
+
+//   //#2410
+//   // val s1_idx = RegEnable(s0_idx, io.s0_fire)
+//   val s1_idx = RegEnable(s0_idx, s0_fire)
+
+
+//   val per_br_ctr = VecInit((0 until numBr).map(i => Mux1H(UIntToOH(get_phy_br_idx(s1_idx, i), numBr), s1_read)))
+//   io.s1_cnt := per_br_ctr
+
+//   // Update logic
+
+//   val u_idx = bimAddr.getIdx(io.update_pc)
+
+//   val newCtrs = Wire(Vec(numBr, UInt(2.W))) // physical bridx
+
+//   val wrbypass = Module(new WrBypass(UInt(2.W), bypassEntries, log2Up(BtSize), numWays = numBr)) // logical bridx
+//   wrbypass.io.wen := io.update_mask.reduce(_||_)
+//   wrbypass.io.write_idx := u_idx
+//   wrbypass.io.write_way_mask.map(_ := io.update_mask)
+//   for (li <- 0 until numBr) {
+//     val br_pidx = get_phy_br_idx(u_idx, li)
+//     wrbypass.io.write_data(li) := newCtrs(br_pidx)
+//   }
+
+
+//   val oldCtrs =
+//     VecInit((0 until numBr).map(pi => {
+//       // val br_lidx = get_lgc_br_idx(u_idx, pi.U(log2Ceil(numBr).W))
+//       val br_lidx = get_lgc_br_idx(u_idx, pi.U(1.W))
+//       Mux(wrbypass.io.hit && wrbypass.io.hit_data(br_lidx).valid,
+//         wrbypass.io.hit_data(br_lidx).bits,
+//         io.update_cnt(br_lidx))
+//     }))
+
+//   def satUpdate(old: UInt, len: Int, taken: Bool): UInt = {
+//     val oldSatTaken = old === ((1 << len)-1).U
+//     val oldSatNotTaken = old === 0.U
+//     Mux(oldSatTaken && taken, ((1 << len)-1).U,
+//       Mux(oldSatNotTaken && !taken, 0.U,
+//         Mux(taken, old + 1.U, old - 1.U)))
+//   }
+
+//   val newTakens = io.update_takens
+//   newCtrs := VecInit((0 until numBr).map(pi => {
+//     // val br_lidx = get_lgc_br_idx(u_idx, pi.U(log2Ceil(numBr).W))
+//     val br_lidx = get_lgc_br_idx(u_idx, pi.U(1.W))
+//     satUpdate(oldCtrs(pi), 2, newTakens(br_lidx))
+//   }))
+
+//   val updateWayMask = VecInit((0 until numBr).map(pi =>
+//     (0 until numBr).map(li =>
+//       io.update_mask(li) && get_phy_br_idx(u_idx, li) === pi.U  
+//     ).reduce(_||_)
+//   )).asUInt
+
+//   bt.io.w.apply(
+//     valid = io.update_mask.reduce(_||_) || doing_reset,
+//     data = Mux(doing_reset, VecInit(Seq.fill(numBr)(2.U(2.W))), newCtrs),
+//     setIdx = Mux(doing_reset, resetRow, u_idx),
+//     waymask = Mux(doing_reset, Fill(numBr, 1.U(1.W)).asUInt, updateWayMask)
+//   )
+
+// }
+
 class TageBTable(parentName:String = "Unknown")(implicit p: Parameters) extends XSModule with TBTParams{
   val io = IO(new Bundle {
-    //#2410
-    // val s0_fire = Input(Bool())
-    // val s0_pc   = Input(UInt(VAddrBits.W))
-    //#2410
-    val req = Flipped(DecoupledIO(UInt(VAddrBits.W))) // s0_pc
-    val s1_cnt     = Output(Vec(numBr,UInt(2.W)))
-    val update_mask = Input(Vec(TageBanks, Bool()))
-    val update_pc = Input(UInt(VAddrBits.W))
-    val update_cnt  = Input(Vec(numBr,UInt(2.W)))
-    val update_takens = Input(Vec(TageBanks, Bool()))
-   // val update  = Input(new TageUpdate)
+    val req          = Flipped(DecoupledIO(UInt(VAddrBits.W)))
+    val cnt          = Output(Vec(numBr,UInt(2.W)))
+    val updateMask   = Input(Vec(TageBanks, Bool()))
+    val updatePC     = Input(UInt(VAddrBits.W))
+    val updateCnt    = Input(Vec(numBr,UInt(2.W)))
+    val updateTakens = Input(Vec(TageBanks, Bool()))
   })
 
-  val bimAddr = new TableAddr(log2Up(BtSize), instOffsetBits)
+  def satUpdate(old: UInt, len: Int, taken: Bool): UInt = {
+    val oldSatTaken = old === ((1 << len)-1).U
+    val oldSatNotTaken = old === 0.U
+    Mux(oldSatTaken && taken, ((1 << len)-1).U,
+      Mux(oldSatNotTaken && !taken, 0.U,
+        Mux(taken, old + 1.U, old - 1.U)))
+  }
 
-  val bt = Module(new SRAMTemplate(UInt(2.W), set = BtSize, way=numBr, shouldReset = true, holdRead = true, bypassWrite = true,
+  val bt = Module(new SRAMTemplate(UInt(2.W), set = BtSize, way=numBr, shouldReset = true,
+    holdRead = true, bypassWrite = true,
     hasMbist = coreParams.hasMbist,
     hasShareBus = coreParams.hasShareBus,
     parentName = parentName
@@ -171,85 +279,44 @@ class TageBTable(parentName:String = "Unknown")(implicit p: Parameters) extends 
     None
   }
 
-  val doing_reset = RegInit(true.B)
+  // reset
+  val btReset = RegInit(true.B)
   val resetRow = RegInit(0.U(log2Ceil(BtSize).W))
-  resetRow := resetRow + doing_reset
-  when (resetRow === (BtSize-1).U) { doing_reset := false.B }
+  resetRow := resetRow + btReset
+  when (resetRow === (BtSize-1).U) { btReset := false.B }
 
-  //#2410
-  io.req.ready := !doing_reset
-  // val s0_idx = bimAddr.getIdx(io.s0_pc)
-  // bt.io.r.req.valid := io.s0_fire
-  val s0_pc = io.req.bits
-  val s0_fire = io.req.valid
-  val s0_idx = bimAddr.getIdx(s0_pc)
-  bt.io.r.req.valid := s0_fire
-  bt.io.r.req.bits.setIdx := s0_idx
-
-  val s1_read = bt.io.r.resp.data
-
-  //#2410
-  // val s1_idx = RegEnable(s0_idx, io.s0_fire)
-  val s1_idx = RegEnable(s0_idx, s0_fire)
-
-
-  val per_br_ctr = VecInit((0 until numBr).map(i => Mux1H(UIntToOH(get_phy_br_idx(s1_idx, i), numBr), s1_read)))
-  io.s1_cnt := per_br_ctr
+  // read bt
+  val addr = new TableAddr(log2Up(BtSize), instOffsetBits)
+  io.req.ready := !btReset
+  val s0PC   = io.req.bits
+  val s0Fire = io.req.valid
+  val s0Idx  = addr.getIdx(s0PC)
+  bt.io.r.req.valid       := s0Fire
+  bt.io.r.req.bits.setIdx := s0Idx
+  val s1ReadData = bt.io.r.resp.data
+  io.cnt := s1ReadData
 
   // Update logic
-
-  val u_idx = bimAddr.getIdx(io.update_pc)
-
-  val newCtrs = Wire(Vec(numBr, UInt(2.W))) // physical bridx
+  val updtIdx = addr.getIdx(io.updatePC)
+  val newCtrs = Wire(Vec(numBr, UInt(2.W)))
 
   val wrbypass = Module(new WrBypass(UInt(2.W), bypassEntries, log2Up(BtSize), numWays = numBr)) // logical bridx
-  wrbypass.io.wen := io.update_mask.reduce(_||_)
-  wrbypass.io.write_idx := u_idx
-  wrbypass.io.write_way_mask.map(_ := io.update_mask)
-  for (li <- 0 until numBr) {
-    val br_pidx = get_phy_br_idx(u_idx, li)
-    wrbypass.io.write_data(li) := newCtrs(br_pidx)
-  }
-
-
-  val oldCtrs =
-    VecInit((0 until numBr).map(pi => {
-      // val br_lidx = get_lgc_br_idx(u_idx, pi.U(log2Ceil(numBr).W))
-      val br_lidx = get_lgc_br_idx(u_idx, pi.U(1.W))
-      Mux(wrbypass.io.hit && wrbypass.io.hit_data(br_lidx).valid,
-        wrbypass.io.hit_data(br_lidx).bits,
-        io.update_cnt(br_lidx))
-    }))
-
-  def satUpdate(old: UInt, len: Int, taken: Bool): UInt = {
-    val oldSatTaken = old === ((1 << len)-1).U
-    val oldSatNotTaken = old === 0.U
-    Mux(oldSatTaken && taken, ((1 << len)-1).U,
-      Mux(oldSatNotTaken && !taken, 0.U,
-        Mux(taken, old + 1.U, old - 1.U)))
-  }
-
-  val newTakens = io.update_takens
-  newCtrs := VecInit((0 until numBr).map(pi => {
-    // val br_lidx = get_lgc_br_idx(u_idx, pi.U(log2Ceil(numBr).W))
-    val br_lidx = get_lgc_br_idx(u_idx, pi.U(1.W))
-    satUpdate(oldCtrs(pi), 2, newTakens(br_lidx))
-  }))
-
-  val updateWayMask = VecInit((0 until numBr).map(pi =>
-    (0 until numBr).map(li =>
-      io.update_mask(li) && get_phy_br_idx(u_idx, li) === pi.U  
-    ).reduce(_||_)
-  )).asUInt
+  wrbypass.io.wen        := io.updateMask.reduce(_||_)
+  wrbypass.io.write_idx  := updtIdx
+  wrbypass.io.write_way_mask.map(_ := io.updateMask)
+  wrbypass.io.write_data := newCtrs
+  val oldCtrs = Mux(wrbypass.io.hit && wrbypass.io.hit_data(0).valid, wrbypass.io.hit_data(0).bits,
+                                                                      io.updateCnt(0))
+  newCtrs(0) := satUpdate(oldCtrs, 2, io.updateTakens(0))
 
   bt.io.w.apply(
-    valid = io.update_mask.reduce(_||_) || doing_reset,
-    data = Mux(doing_reset, VecInit(Seq.fill(numBr)(2.U(2.W))), newCtrs),
-    setIdx = Mux(doing_reset, resetRow, u_idx),
-    waymask = Mux(doing_reset, Fill(numBr, 1.U(1.W)).asUInt, updateWayMask)
+    valid   = io.updateMask.reduce(_||_) || btReset,
+    data    = Mux(btReset, VecInit(Seq.fill(numBr)(2.U(2.W))), newCtrs),
+    setIdx  = Mux(btReset, resetRow, updtIdx),
+    waymask = Mux(btReset, Fill(numBr, 1.U(1.W)).asUInt, io.updateMask.asUInt)
   )
-
 }
+
 
 
 
@@ -307,7 +374,7 @@ class TageTable
     val tag_fh = allFh.getHistWithInfo(tagFhInfo).folded_hist
     val alt_tag_fh = allFh.getHistWithInfo(altTagFhInfo).folded_hist
     // require(idx_fh.getWidth == log2Ceil(nRows))
-    val idx = (unhashed_idx ^ idx_fh)(log2Ceil(nRowsPerBr / 4)-1, 0)
+    val idx = (unhashed_idx ^ idx_fh)(log2Ceil(nRowsPerBr)-1, 0)
     val tag = (unhashed_idx ^ tag_fh ^ (alt_tag_fh << 1)) (tagLen - 1, 0)
     (idx, tag)
   }
@@ -327,19 +394,7 @@ class TageTable
   // val s1_pc = io.req.bits.pc
   val req_unhashed_idx = getUnhashedIdx(io.req.bits.pc)
 
-  // val us = Module(new FoldedSRAMTemplate(Bool(),
-  //   set=nRowsPerBr, width=uFoldedWidth, way=numBr,
-  //   shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
-  //   hasMbist = coreParams.hasMbist,
-  //   hasShareBus = coreParams.hasShareBus,
-  //   parentName = parentName + "us_"
-  // ))
-  val associating = 4
-  val associSetNum = nRowsPerBr / associating
-  val associSetNumPerBank = bankSize / associating
-  val us = Module(new SRAMTemplate(Bool(),
-    set=associSetNum, way=associating,
-    shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
+  val us = Module(new FoldedSRAMTemplate(Bool(), set=nRowsPerBr, width=uFoldedWidth, way=numBr, shouldReset=true, extraReset=true, holdRead=true, singlePort=true,
     hasMbist = coreParams.hasMbist,
     hasShareBus = coreParams.hasShareBus,
     parentName = parentName + "us_"
@@ -347,18 +402,8 @@ class TageTable
   us.extra_reset.get := io.update.reset_u.reduce(_||_)
 
 
-  // val table_banks = Seq.tabulate(nBanks)(idx =>
-  //   Module(new FoldedSRAMTemplate(new TageEntry,
-  //     set=bankSize, width=bankFoldWidth, way=numBr,
-  //     shouldReset=true, holdRead=true, singlePort=true,
-  //     hasMbist = coreParams.hasMbist,
-  //     hasShareBus = coreParams.hasShareBus,
-  //     parentName = parentName + s"table${idx}_"
-  //   )))
   val table_banks = Seq.tabulate(nBanks)(idx =>
-    Module(new SRAMTemplate(new TageEntry,
-      set=associSetNumPerBank, way=associating,
-      shouldReset=true, holdRead=true, singlePort=true,
+    Module(new FoldedSRAMTemplate(new TageEntry, set=bankSize, width=bankFoldWidth, way=numBr, shouldReset=true, holdRead=true, singlePort=true,
       hasMbist = coreParams.hasMbist,
       hasShareBus = coreParams.hasShareBus,
       parentName = parentName + s"table${idx}_"
@@ -370,18 +415,14 @@ class TageTable
     None
   }
 
-  val replacer = ReplacementPolicy.fromString(Some("setplru"), 4, associSetNum)
-
 
   val (s0_idx, s0_tag) = compute_tag_and_hash(req_unhashed_idx, io.req.bits.folded_hist)
   val s0_bank_req_1h = get_bank_mask(s0_idx)
-  val update_unhashed_idx = getUnhashedIdx(io.update.pc)
-  val (update_idx, update_tag) = compute_tag_and_hash(update_unhashed_idx, io.update.folded_hist)
 
-  for (b <- 0 until nBanks) {
-    table_banks(b).io.r.req.valid := (io.req.fire && s0_bank_req_1h(b)) // || io.update.alloc(0)
-    table_banks(b).io.r.req.bits.setIdx := get_bank_idx(s0_idx) //Mux(io.update.alloc(0), get_bank_idx(update_idx), get_bank_idx(s0_idx) )
-  }
+    for (b <- 0 until nBanks) {
+      table_banks(b).io.r.req.valid := io.req.fire && s0_bank_req_1h(b)
+      table_banks(b).io.r.req.bits.setIdx := get_bank_idx(s0_idx)
+    }
 
   us.io.r.req.valid := io.req.fire
   us.io.r.req.bits.setIdx := s0_idx
@@ -397,26 +438,13 @@ class TageTable
   val resp_invalid_by_write = Wire(Bool())
   
   val tables_r = table_banks.map(_.io.r.resp.data) // s1
-  val tablesBankValids = tables_r.map(bank => VecInit(bank.map(_.valid)))
-  // 每个bank的每个set的unconf
   val unconfs = tables_r.map(r => VecInit(r.map(e => WireInit(unconf(e.ctr))))) // do unconf cal in parallel
-  // 每个bank的每个set的hit的vec
   val hits = tables_r.map(r => VecInit(r.map(e => e.tag === s1_tag && e.valid && !resp_invalid_by_write))) // do tag compare in parallel
   
-  // 对应bank的set的resp-data
-  val tablesValids = Mux1H(s1_bank_req_1h, tablesBankValids)
   val resp_selected = Mux1H(s1_bank_req_1h, tables_r)
   val unconf_selected = Mux1H(s1_bank_req_1h, unconfs)
   val hit_selected = Mux1H(s1_bank_req_1h, hits)
   resp_invalid_by_write := Mux1H(s1_bank_req_1h, s1_bank_has_write_on_this_req)
-
-  // 找到hit的way
-  // val s1RespTags = resp_selected.map(_.tag)
-  // val s1SetHits = VecInit((0 until associating).map(way =>
-  //   s1_tag === s1RespTags(way) && resp_selected.valid && ))
-  val isS1Hit = hit_selected.reduce(_||_)
-  // val s1HitWayIdx = OHToUInt(hit_selected, associating)
-  val s1HitWayIdx = PriorityEncoder(hit_selected)
 
 
   val per_br_resp = VecInit((0 until numBr).map(i => Mux1H(UIntToOH(get_phy_br_idx(s1_unhashed_idx, i), numBr), resp_selected)))
@@ -425,11 +453,10 @@ class TageTable
   val per_br_u    = VecInit((0 until numBr).map(i => Mux1H(UIntToOH(get_phy_br_idx(s1_unhashed_idx, i), numBr), us.io.r.resp.data)))
 
   for (i <- 0 until numBr) {
-    io.resps(i).valid := isS1Hit // per_br_hit(i)
-    io.resps(i).bits.ctr := resp_selected(s1HitWayIdx).ctr //per_br_resp(i).ctr
-    io.resps(i).bits.u := us.io.r.resp.data(s1HitWayIdx) // per_br_u(i)
-    io.resps(i).bits.unconf := unconf_selected(s1HitWayIdx) //per_br_unconf(i)
-    io.resps(i).bits.wayIdx := s1HitWayIdx
+    io.resps(i).valid := per_br_hit(i)
+    io.resps(i).bits.ctr := per_br_resp(i).ctr
+    io.resps(i).bits.u := per_br_u(i)
+    io.resps(i).bits.unconf := per_br_unconf(i)
   }
 
   if (EnableGHistDiff) {
@@ -442,32 +469,10 @@ class TageTable
   // Use fetchpc to compute hash
   val per_bank_update_wdata = Wire(Vec(nBanks, Vec(numBr, new TageEntry))) // corresponds to physical branches
 
-  // val update_unhashed_idx = getUnhashedIdx(io.update.pc)
-  // val (update_idx, update_tag) = compute_tag_and_hash(update_unhashed_idx, io.update.folded_hist)
+  val update_unhashed_idx = getUnhashedIdx(io.update.pc)
+  val (update_idx, update_tag) = compute_tag_and_hash(update_unhashed_idx, io.update.folded_hist)
   val update_req_bank_1h = get_bank_mask(update_idx)
   val update_idx_in_bank = get_bank_idx(update_idx)
-
-  def getAllocWayIdx(valids: UInt, setIdx: UInt) = {
-    val allocWayIdx = WireDefault(0.U(log2Ceil(associating).W))
-    if(associating > 1) {
-      val isValid = valids.andR
-      allocWayIdx := Mux(isValid, replacer.way(setIdx), PriorityEncoder(~valids))
-    }
-    allocWayIdx
-  }
-  // val writeWayIdx = Mux(RegNext(io.update.alloc(0)), getAllocWayIdx(tablesValids.asUInt, update_idx), RegNext(io.update.wayIdx)) // replacer.way(update_idx), io.update.wayIdx)
-  val writeWayIdx = Mux(io.update.alloc(0), replacer.way(update_idx), io.update.wayIdx)
-  // val writeWayIdx = Mux(io.update.alloc(0), getAllocWayIdx(tablesValids.asUInt, update_idx), io.update.wayIdx) // replacer.way(update_idx), io.update.wayIdx)
-  val writeWayMask = UIntToOH(writeWayIdx, associating)
-  val touchSetIdx = Seq.fill(1)(Wire(UInt(log2Ceil(associSetNum).W))) //WireDefault(0.U(log2Ceil(associSetNum).W))
-  val touchWayIdx = Seq.fill(1)(Wire(Valid(UInt(2.W)))) //WireDefault(0.U.asTypeOf(Valid(UInt(2.W))))
-  touchSetIdx(0) := Mux(io.update.mask(0), update_idx, s1_idx)
-  touchWayIdx(0).valid := io.update.mask(0) || (RegNext(io.req.fire) && isS1Hit) || io.update.alloc(0)
-  touchWayIdx(0).bits  := Mux(io.update.alloc(0) || io.update.mask(0), writeWayIdx, s1HitWayIdx)
-  // touchSetIdx(0) := Mux(RegNext(io.update.mask(0)), RegNext(update_idx), s1_idx)
-  // touchWayIdx(0).valid := RegNext(io.update.mask(0)) || (RegNext(io.req.fire) && isS1Hit) || RegNext(io.update.alloc(0))
-  // touchWayIdx(0).bits  := Mux(RegNext(io.update.alloc(0) || io.update.mask(0)), writeWayIdx, s1HitWayIdx)
-  replacer.access(touchSetIdx, touchWayIdx)
   
   val per_bank_not_silent_update = Wire(Vec(nBanks, Vec(numBr, Bool()))) // corresponds to physical branches
   val per_bank_update_way_mask =
@@ -484,13 +489,10 @@ class TageTable
 
   for (b <- 0 until nBanks) {
     table_banks(b).io.w.apply(
-      // valid   = RegNext(per_bank_update_way_mask(b).orR && update_req_bank_1h(b)),
-      // data    = RegNext(per_bank_update_wdata(b)(0)),
-      // setIdx  = RegNext(update_idx_in_bank),
       valid   = per_bank_update_way_mask(b).orR && update_req_bank_1h(b),
-      data    = per_bank_update_wdata(b)(0),
+      data    = per_bank_update_wdata(b),
       setIdx  = update_idx_in_bank,
-      waymask = writeWayMask // per_bank_update_way_mask(b)
+      waymask = per_bank_update_way_mask(b)
     )
   }
 
@@ -525,8 +527,7 @@ class TageTable
     ))
   ))
 
-  us.io.w.apply(io.update.uMask.reduce(_||_), update_u_wdata(0), update_u_idx, writeWayMask)//update_u_way_mask)
-  // us.io.w.apply(RegNext(io.update.uMask.reduce(_||_)), RegNext(update_u_wdata(0)), RegNext(update_u_idx), writeWayMask)//update_u_way_mask)
+  us.io.w.apply(io.update.uMask.reduce(_||_), update_u_wdata, update_u_idx, update_u_way_mask)
   
   // remove silent updates
   def silentUpdate(ctr: UInt, taken: Bool) = {
@@ -741,7 +742,6 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val updatebcnt    = Wire(Vec(TageBanks, UInt(2.W)))
   val baseupdate    = WireInit(0.U.asTypeOf(Vec(TageBanks, Bool())))
   val bUpdateTakens = Wire(Vec(TageBanks, Bool()))
-  val oldWayIdx = WireDefault(0.U(2.W))
   updateTakens  := DontCare
   updateOldCtrs  := DontCare
   updateU       := DontCare
@@ -801,7 +801,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
     resp_meta.allocates(i) := RegEnable(allocatableSlots, io.s2_fire(1))
 
     s1_altUsed(i)       := !provided || providerInfo.use_alt_on_unconf
-    val s1_bimCtr = bt.io.s1_cnt(i)
+    val s1_bimCtr = bt.io.cnt(i)
     s1_tageTakens(i) := 
       Mux(s1_altUsed(i) ,
         s1_bimCtr(1),
@@ -874,7 +874,6 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
 
     updateMeta.use_alt_on_na.map(uaon => XSPerfAccumulate(f"tage_bank_${i}_use_alt_on_na", hasUpdate && uaon(i)))
 
-    
     when (hasUpdate) {
       when (updateProvided) {
         updateMask(i)(updateProvider) := true.B
@@ -883,7 +882,6 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
         updateTakens(i)(updateProvider) := updateTaken
         updateOldCtrs(i)(updateProvider) := updateProviderResp.ctr
         updateAlloc(i)(updateProvider) := false.B
-        oldWayIdx := updateProviderResp.wayIdx
       }
     }
 
@@ -960,7 +958,6 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
       tables(i).io.update.takens(w)  := RegEnable(updateTakens(w)(i), false.B, updateValids(w))
       tables(i).io.update.alloc(w)   := RegEnable(updateAlloc(w)(i), false.B, updateValids(w))
       tables(i).io.update.oldCtrs(w) := RegEnable(updateOldCtrs(w)(i), 0.U, updateValids(w))
-      tables(i).io.update.wayIdx     := RegEnable(oldWayIdx, 0.U, updateValids(w))
 
       tables(i).io.update.uMask(w)   := RegNext(updateUMask(w)(i), false.B)
       tables(i).io.update.us(w)      := RegNext(updateU(w)(i), false.B)
@@ -971,10 +968,10 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
       tables(i).io.update.ghist := RegEnable(io.update(dupForTageSC).bits.ghist, 0.U, updateValids(w))
     }
   }
-  bt.io.update_mask := RegNext(baseupdate)
-  bt.io.update_cnt := RegEnable(updatebcnt, updateValids(0))
-  bt.io.update_pc := RegEnable(update.pc, updateValids(0))
-  bt.io.update_takens := RegEnable(bUpdateTakens, updateValids(0))
+  bt.io.updateMask   := RegNext(baseupdate)
+  bt.io.updateCnt    := RegEnable(updatebcnt, updateValids(0))
+  bt.io.updatePC     := RegEnable(update.pc, updateValids(0))
+  bt.io.updateTakens := RegEnable(bUpdateTakens, updateValids(0))
 
   // all should be ready for req
   // io.s1_ready := tables.map(_.io.req.ready).reduce(_&&_)
