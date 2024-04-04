@@ -110,7 +110,7 @@ class SCTable(val nRows: Int, val ctrBits: Int, val histLen: Int, parentName:Str
 
   def ctrUpdate(ctr: SInt, cond: Bool): SInt = signedSatUpdate(ctr, ctrBits, cond)
 
-  val s0_idx = getIdx(io.req.bits.pc, io.req.bits.folded_hist)
+  val s0_idx = getIdx(io.req.bits.pc, io.req.bits.foldedHist)
   val s1_idx = RegEnable(s0_idx, io.req.valid)
 
   val s1_pc = RegEnable(io.req.bits.pc, io.req.fire)
@@ -239,7 +239,7 @@ trait HasSC extends HasSCParameter with HasPerfEvents { this: Tage =>
         val req = t.io.req
         req.valid := io.s0_fire(dupForTageSC)
         req.bits.pc := s0_pc_dup(dupForTageSC)
-        req.bits.folded_hist := io.in.bits.folded_hist(dupForTageSC)
+        req.bits.foldedHist := io.in.bits.folded_hist(dupForTageSC)
         req.bits.ghist := DontCare
         if (!EnableSC) {t.io.update := DontCare}
         t

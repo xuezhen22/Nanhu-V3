@@ -43,6 +43,9 @@ trait TageParams extends HasBPUConst with HasXSParameter {
   val NUM_USE_ALT_ON_NA = 128
   def use_alt_idx(pc: UInt) = (pc >> instOffsetBits)(log2Ceil(NUM_USE_ALT_ON_NA)-1, 0)
 
+  val altCtrsNum = 128
+  val alterCtrBits = 4
+
   val TotalBits = TageTableInfos.map {
     case (s, h, t) => {
       s * (1+t+TageCtrBits+1)
@@ -89,30 +92,42 @@ abstract class TageModule(implicit p: Parameters)
 
 
 class TageReq(implicit p: Parameters) extends TageBundle {
-  val pc = UInt(VAddrBits.W)
-  val ghist = UInt(HistoryLength.W)
-  val folded_hist = new AllFoldedHistories(foldedGHistInfos)
+  val pc         = UInt(VAddrBits.W)
+  val ghist      = UInt(HistoryLength.W)
+  val foldedHist = new AllFoldedHistories(foldedGHistInfos)
 }
 
 class TageResp(implicit p: Parameters) extends TageBundle {
-  val ctr = UInt(TageCtrBits.W)
-  val u = Bool()
+  val ctr    = UInt(TageCtrBits.W)
+  val u      = Bool()
   val unconf = Bool()
+  val wayIdx = UInt(2.W)
 }
 
 class TageUpdate(implicit p: Parameters) extends TageBundle {
-  val pc = UInt(VAddrBits.W)
-  val folded_hist = new AllFoldedHistories(foldedGHistInfos)
-  val ghist = UInt(HistoryLength.W)
-  // update tag and ctr
-  val mask = Vec(numBr, Bool())
-  val takens = Vec(numBr, Bool())
-  val alloc = Vec(numBr, Bool())
-  val oldCtrs = Vec(numBr, UInt(TageCtrBits.W))
-  // update u
-  val uMask = Vec(numBr, Bool())
-  val us = Vec(numBr, Bool())
-  val reset_u = Vec(numBr, Bool())
+  // val pc = UInt(VAddrBits.W)
+  // val folded_hist = new AllFoldedHistories(foldedGHistInfos)
+  // val ghist = UInt(HistoryLength.W)
+  // // update tag and ctr
+  // val mask = Vec(numBr, Bool())
+  // val takens = Vec(numBr, Bool())
+  // val alloc = Vec(numBr, Bool())
+  // val oldCtrs = Vec(numBr, UInt(TageCtrBits.W))
+  // // update u
+  // val uMask = Vec(numBr, Bool())
+  // val us = Vec(numBr, Bool())
+  // val reset_u = Vec(numBr, Bool())
+  val pc         = UInt(VAddrBits.W)
+  val foldedHist = new AllFoldedHistories(foldedGHistInfos)
+  val ghist      = UInt(HistoryLength.W)
+  val mask       = Vec(numBr, Bool())
+  val takens     = Vec(numBr, Bool())
+  val alloc      = Vec(numBr, Bool())
+  val oldCtrs    = Vec(numBr, UInt(TageCtrBits.W))
+  val wayIdx     = UInt(2.W)
+  val uMask      = Vec(numBr, Bool())
+  val us         = Vec(numBr, Bool())
+  val reset_u    = Vec(numBr, Bool())
 }
 
 class TageMeta(implicit p: Parameters)
@@ -652,8 +667,11 @@ class TageTable
     val ctr = UInt(TageCtrBits.W)
   }
 
+  val SRAM_SIZE = 256
   require(nRows % SRAM_SIZE == 0)
   require(isPow2(numBr))
+  val nBanks = 8
+  val bankIdxWidth = log2Ceil(nBanks)
   val nRowsPerBr = nRows / numBr
   val bankSize = nRowsPerBr / nBanks
   val uFoldedWidth = nRowsPerBr / SRAM_SIZE
@@ -934,7 +952,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
       val t = Module(new TageTable(nRows, histLen, tagLen, i, parentName = parentName + s"tagtable${i}_"))
       t.io.req.valid := io.s0_fire(1)
       t.io.req.bits.pc := s0_pc_dup(1)
-      t.io.req.bits.folded_hist := io.in.bits.folded_hist(1)
+      t.io.req.bits.foldedHist := io.in.bits.folded_hist(1)
       t.io.req.bits.ghist := io.in.bits.ghist
       t
     }
@@ -959,7 +977,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val tage_fh_info = tables.map(_.getFoldedHistoryInfo).reduce(_++_).toSet
   override def getFoldedHistoryInfo = Some(tage_fh_info)
 
-  val s1_resps = VecInit(tables.map(_.io.resps))
+  val s1_resps = VecInit(tables.map(_.io.resp))
 
   //val s1_bim = io.in.bits.resp_in(0).s1.full_pred
   // val s2_bim = RegEnable(s1_bim, io.s1_fire)
@@ -1037,7 +1055,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
     val useAltCtr = Mux1H(UIntToOH(use_alt_idx(s1_pc_dup(1)), NUM_USE_ALT_ON_NA), useAltOnNaCtrs(i))
     val useAltOnNa = useAltCtr(USE_ALT_ON_NA_WIDTH-1) // highest bit
 
-    val s1_per_br_resp = VecInit(s1_resps.map(_(i)))
+    val s1_per_br_resp = s1_resps //VecInit(s1_resps.map(_(i)))
     val inputRes = s1_per_br_resp.zipWithIndex.map{case (r, idx) => {
       val tableInfo = Wire(new TageTableInfo)
       tableInfo.resp := r.bits
@@ -1242,8 +1260,9 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
       tables(i).io.update.reset_u(w) := RegNext(updateResetU(w), false.B)
       // use fetch pc instead of instruction pc
       tables(i).io.update.pc       := RegEnable(update.pc, 0.U, updateValids(w))
-      tables(i).io.update.folded_hist := RegEnable(updateFHist, updateValids(w))
+      tables(i).io.update.foldedHist := RegEnable(updateFHist, updateValids(w))
       tables(i).io.update.ghist := RegEnable(io.update(dupForTageSC).bits.ghist, 0.U, updateValids(w))
+      tables(i).io.update.wayIdx := DontCare
     }
   }
   bt.io.updateMask   := RegNext(baseupdate)
@@ -1317,11 +1336,67 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   for (b <- 0 until TageBanks) {
     for (i <- 0 until TageNTables) {
       XSDebug("bank(%d)_tage_table(%d): valid:%b, resp_ctr:%d, resp_us:%d\n",
-        b.U, i.U, s2_resps(i)(b).valid, s2_resps(i)(b).bits.ctr, s2_resps(i)(b).bits.u)
+        b.U, i.U, s2_resps(i).valid, s2_resps(i).bits.ctr, s2_resps(i).bits.u)
     }
   }
     // XSDebug(io.update.valid && updateIsBr, p"update: sc: ${updateSCMeta}\n")
     // XSDebug(true.B, p"scThres: use(${useThreshold}), update(${updateThreshold})\n")
+
+
+  // new tage
+  // val TickMax = ((1 << TickWidth) - 1).U
+
+  // val tageMeta = WireDefault(0.U.asTypeOf(new TageMeta))
+  // override val meta_size = tageMeta.getWidth
+
+  // val tageTable = TageTableInfos.zipWithIndex.map {
+  //   case ((nRows, histLen, tagLen), i) => {
+  //     val t = Module(new TageTable(nRows, histLen, tagLen, i, parentName = parentName + s"tagtable${i}_"))
+  //     t.io.req.valid           := io.s0_fire(1)
+  //     t.io.req.bits.pc         := s0_pc_dup(1)
+  //     t.io.req.bits.foldedHist := io.in.bits.folded_hist(1)
+  //     t.io.req.bits.ghist      := io.in.bits.ghist
+  //     t
+  //   }
+  // }
+
+  // val bt = Module (new TageBTable(parentName = parentName + "bttable_"))
+  // bt.io.req.valid := io.s0_fire(1)
+  // bt.io.req.bits  := s0_pc_dup(1)
+
+  // val altCounters = RegInit(VecInit(
+  //   Seq.fill(altCtrsNum)((1 << (alterCtrBits-1)).U(alterCtrBits.W))))
+
+  // val s1DebugPC = RegEnable(s0_pc_dup(1), io.s0_fire(1))
+  // val s2DebugPC = RegEnable(s1DebugPC, io.s1_fire(1))
+  // val tage_fh_info = tageTable.map(_.getFoldedHistoryInfo).reduce(_++_).toSet
+  // override def getFoldedHistoryInfo = Some(tage_fh_info)
+
+  // // predict
+  // val s1RespVec      = tageTable.map(_.io.resp)
+  // val s1RespBitsVec  = s1RespVec.map(_.bits)
+  // val s1RespValidVec = s1RespVec.map(_.valid)
+  // val s1Provide      = s1RespValidVec.reduce(_||_)
+  // val s1ProIdxVec    = VecInit((0 until TageNTables).map(i => i.U))
+  // val s1ProvideIdx   = ParallelPriorityMux(s1RespValidVec.reverse, s1ProIdxVec.reverse)
+  // val s1Resp         = ParallelPriorityMux(s1RespValidVec.reverse, s1RespBitsVec.reverse)
+  // val predAltCtrIdx  = useAltIdx(s1_pc_dup(1))
+  // val predAltCtr     = Mux1H( UIntToOH(predAltCtrIdx, altCtrsNum), useAltOnNaCtrs) // altCounters )
+  // val isUseAltCtr    = (predAltCtr(alterCtrBits - 1) && s1Resp.unconf) || !s1Provide
+  // val s1BaseCtr      = bt.io.cnt(0)
+  // val s1PredTaken    = Mux(isUseAltCtr, s1BaseCtr(1), s1Resp.ctr(TageCtrBits - 1))
+  // val s2PredTaken    = RegEnable(s1PredTaken, false.B, io.s1_fire(1))
+  // val s3PredTaken    = RegEnable(s2PredTaken, false.B, io.s2_fire(1))
+
+  // val s2TageEna  = RegEnable(RegEnable(io.ctrl.tage_enable, io.s0_fire(1)), io.s1_fire(1))
+  // val s3TageEna  = RegEnable(s2TageEna, io.s2_fire(1))
+ 
+  // when(s2TageEna) {
+  //   io.out.s2.full_pred.map(_.br_taken_mask(0) := s2PredTaken)
+  // }
+  // when(s3TageEna) {
+  //   io.out.s3.full_pred.map(_.br_taken_mask(0) := s3PredTaken)
+  // }
 }
 
 
