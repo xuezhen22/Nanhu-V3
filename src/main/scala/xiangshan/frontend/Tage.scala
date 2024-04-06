@@ -947,6 +947,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
 
   val resp_meta = Wire(new TageMeta)
   override val meta_size = resp_meta.getWidth
+
   val tables = TageTableInfos.zipWithIndex.map {
     case ((nRows, histLen, tagLen), i) => {
       val t = Module(new TageTable(nRows, histLen, tagLen, i, parentName = parentName + s"tagtable${i}_"))
@@ -1372,31 +1373,75 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // val tage_fh_info = tageTable.map(_.getFoldedHistoryInfo).reduce(_++_).toSet
   // override def getFoldedHistoryInfo = Some(tage_fh_info)
 
-  // // predict
-  // val s1RespVec      = tageTable.map(_.io.resp)
-  // val s1RespBitsVec  = s1RespVec.map(_.bits)
-  // val s1RespValidVec = s1RespVec.map(_.valid)
-  // val s1Provide      = s1RespValidVec.reduce(_||_)
-  // val s1ProIdxVec    = VecInit((0 until TageNTables).map(i => i.U))
-  // val s1ProvideIdx   = ParallelPriorityMux(s1RespValidVec.reverse, s1ProIdxVec.reverse)
-  // val s1Resp         = ParallelPriorityMux(s1RespValidVec.reverse, s1RespBitsVec.reverse)
-  // val predAltCtrIdx  = useAltIdx(s1_pc_dup(1))
-  // val predAltCtr     = Mux1H( UIntToOH(predAltCtrIdx, altCtrsNum), useAltOnNaCtrs) // altCounters )
-  // val isUseAltCtr    = (predAltCtr(alterCtrBits - 1) && s1Resp.unconf) || !s1Provide
-  // val s1BaseCtr      = bt.io.cnt(0)
-  // val s1PredTaken    = Mux(isUseAltCtr, s1BaseCtr(1), s1Resp.ctr(TageCtrBits - 1))
-  // val s2PredTaken    = RegEnable(s1PredTaken, false.B, io.s1_fire(1))
-  // val s3PredTaken    = RegEnable(s2PredTaken, false.B, io.s2_fire(1))
+  // predict
+  val s1RespVec      = tables.map(_.io.resp) // tageTable.map(_.io.resp)
+  val s1RespBitsVec  = s1RespVec.map(_.bits)
+  val s1RespValidVec = s1RespVec.map(_.valid)
+  val s1Provide      = s1RespValidVec.reduce(_||_)
+  val s1ProIdxVec    = VecInit((0 until TageNTables).map(i => i.U))
+  val s1ProvideIdx   = ParallelPriorityMux(s1RespValidVec.reverse, s1ProIdxVec.reverse)
+  val s1Resp         = ParallelPriorityMux(s1RespValidVec.reverse, s1RespBitsVec.reverse)
+  val predAltCtrIdx  = use_alt_idx(s1_pc_dup(1)) //useAltIdx(s1_pc_dup(1))
+  val predAltCtr     = Mux1H( UIntToOH(predAltCtrIdx, altCtrsNum), useAltOnNaCtrs(0)) // altCounters )
+  val isUseAltCtr    = (predAltCtr(alterCtrBits - 1) && s1Resp.unconf) || !s1Provide
+  val s1BaseCtr      = bt.io.cnt(0)
+  val s1PredTaken    = Mux(isUseAltCtr, s1BaseCtr(1), s1Resp.ctr(TageCtrBits - 1))
+  val s2PredTaken    = RegEnable(s1PredTaken, false.B, io.s1_fire(1))
+  val s3PredTaken    = RegEnable(s2PredTaken, false.B, io.s2_fire(1))
 
-  // val s2TageEna  = RegEnable(RegEnable(io.ctrl.tage_enable, io.s0_fire(1)), io.s1_fire(1))
-  // val s3TageEna  = RegEnable(s2TageEna, io.s2_fire(1))
+  val s2TageEna  = RegEnable(RegEnable(io.ctrl.tage_enable, io.s0_fire(1)), io.s1_fire(1))
+  val s3TageEna  = RegEnable(s2TageEna, io.s2_fire(1))
  
-  // when(s2TageEna) {
-  //   io.out.s2.full_pred.map(_.br_taken_mask(0) := s2PredTaken)
-  // }
-  // when(s3TageEna) {
-  //   io.out.s3.full_pred.map(_.br_taken_mask(0) := s3PredTaken)
-  // }
+  when(s2TageEna) {
+    io.out.s2.full_pred.map(_.br_taken_mask(0) := s2PredTaken)
+  }
+  when(s3TageEna) {
+    io.out.s3.full_pred.map(_.br_taken_mask(0) := s3PredTaken)
+  }
+
+  // meta
+  // val s1AllocMask  = VecInit(s1RespVec.map(resp => !resp.valid && !resp.bits.u)).asUInt &
+  //   ~(LowerMask(UIntToOH(s1ProvideIdx, TageNTables)) & Fill(TageNTables, s1Provide.asUInt))
+  // val s1altDiffer  = s1BaseCtr(1) =/= s1PredTaken // s1Resp.ctr(TageCtrBits - 1)
+  // val s1UseAltOnNa = predAltCtr(alterCtrBits - 1) && s1Resp.unconf
+  // val s1HitWayIdx  = s1Resp.wayIdx
+
+  // val s2altUsed     = RegEnable(isUseAltCtr, false.B, io.s1_fire(1))
+  // val s2Provide     = RegEnable(s1Provide, false.B, io.s1_fire(1))
+  // val s2ProvideIdx  = RegEnable(s1ProvideIdx, 0.U.asTypeOf(s1ProvideIdx), io.s1_fire(1))
+  // val s2Resp        = RegEnable(s1Resp, 0.U.asTypeOf(s1Resp), io.s1_fire(1))
+  // val s2altDiffer   = RegEnable(s1altDiffer, false.B, io.s1_fire(1))
+  // val s2AllocMask   = RegEnable(s1AllocMask, 0.U.asTypeOf(s1AllocMask), io.s1_fire(1))
+  // val s2PredCycle   = GTimer()
+  // val s2UseAltOnNa  = RegEnable(s1UseAltOnNa, 0.U.asTypeOf(s1UseAltOnNa), io.s1_fire(1))
+  // val s2BaseCtr     = RegEnable(s1BaseCtr, 0.U, io.s1_fire(1))
+  // val s2HitWayIdx   = RegEnable(s1HitWayIdx, io.s1_fire(1))
+
+  // val s3Provide    = RegEnable(s2Provide, false.B, io.s2_fire(1))
+  // val s3ProvideIdx = RegEnable(s2ProvideIdx, 0.U.asTypeOf(s1ProvideIdx), io.s2_fire(1))
+  // val s3Resp       = RegEnable(s2Resp, 0.U.asTypeOf(s1Resp), io.s2_fire(1))
+  // val s3altUsed    = RegEnable(s2altUsed, false.B, io.s2_fire(1))
+  // val s3altDiffer  = RegEnable(s2altDiffer, false.B, io.s2_fire(1))
+  // val s3baseCtr    = RegEnable(s2BaseCtr, 0.U, io.s2_fire(1))
+  // val s3AllocMask  = RegEnable(s2AllocMask, 0.U.asTypeOf(s2AllocMask), io.s2_fire(1))
+  // val s3PredCycle  = RegEnable(s2PredCycle, 0.U.asTypeOf(s2PredCycle), io.s2_fire(1))
+  // val s3UseAltOnNa = RegEnable(s2UseAltOnNa, 0.U.asTypeOf(s2UseAltOnNa), io.s2_fire(1))
+  // val s3HitWayIdx  = RegEnable(s2HitWayIdx, io.s2_fire(1))
+
+  // tageMeta.providers(0).valid := s3Provide
+  // tageMeta.providers(0).bits  := s3ProvideIdx
+  // tageMeta.providerResps(0)   := s3Resp
+  // tageMeta.altUsed(0)         := s3altUsed
+  // tageMeta.altDiffers(0)      := s3altDiffer
+  // tageMeta.basecnts(0)        := s3baseCtr
+  // tageMeta.allocates(0)       := s3AllocMask
+  // tageMeta.takens(0)          := s3PredTaken
+  // tageMeta.pred_cycle.map(_ := s3PredCycle)
+  // tageMeta.use_alt_on_na.map(_(0) := s3UseAltOnNa)
+  // tageMeta.wayIdx             := s3HitWayIdx
+
+  // io.out.last_stage_meta := tageMeta.asUInt
+
 }
 
 
