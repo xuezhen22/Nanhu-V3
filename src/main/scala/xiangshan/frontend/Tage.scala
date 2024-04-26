@@ -562,7 +562,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // meta
   val s1AllocMask  = VecInit(s1RespVec.map(resp => !resp.valid && !resp.bits.u)).asUInt &
     ~(LowerMask(UIntToOH(s1ProvideIdx, TageNTables)) & Fill(TageNTables, s1Provide.asUInt))
-  val s1altDiffer  = s1BaseCtr(1) =/= s1PredTaken // s1Resp.ctr(TageCtrBits - 1)
+  val s1altDiffer  = s1BaseCtr(1) =/= s1Resp.ctr(TageCtrBits - 1)
   val s1UseAltOnNa = predAltCtr(alterCtrBits - 1) && s1Resp.unconf
   val s1HitWayIdx  = s1Resp.wayIdx
 
