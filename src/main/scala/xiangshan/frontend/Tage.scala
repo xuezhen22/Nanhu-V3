@@ -1366,8 +1366,8 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // bt.io.req.valid := io.s0_fire(1)
   // bt.io.req.bits  := s0_pc_dup(1)
 
-  // val altCounters = RegInit(VecInit(
-  //   Seq.fill(altCtrsNum)((1 << (alterCtrBits-1)).U(alterCtrBits.W))))
+  val altCounters = RegInit(VecInit(
+    Seq.fill(altCtrsNum)((1 << (alterCtrBits-1)).U(alterCtrBits.W))))
 
   // val s1DebugPC = RegEnable(s0_pc_dup(1), io.s0_fire(1))
   // val s2DebugPC = RegEnable(s1DebugPC, io.s1_fire(1))
@@ -1383,7 +1383,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val s1ProvideIdx   = ParallelPriorityMux(s1RespValidVec.reverse, s1ProIdxVec.reverse)
   val s1Resp         = ParallelPriorityMux(s1RespValidVec.reverse, s1RespBitsVec.reverse)
   val predAltCtrIdx  = use_alt_idx(s1_pc_dup(1)) //useAltIdx(s1_pc_dup(1))
-  val predAltCtr     = Mux1H( UIntToOH(predAltCtrIdx, altCtrsNum), useAltOnNaCtrs(0)) // altCounters )
+  val predAltCtr     = Mux1H( UIntToOH(predAltCtrIdx, altCtrsNum), altCounters ) //useAltOnNaCtrs(0)) // 
   val isUseAltCtr    = (predAltCtr(alterCtrBits - 1) && s1Resp.unconf) || !s1Provide
   val s1BaseCtr      = bt.io.cnt(0)
   val s1PredTaken    = Mux(isUseAltCtr, s1BaseCtr(1), s1Resp.ctr(TageCtrBits - 1))
@@ -1430,13 +1430,13 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val s3HitWayIdx  = RegEnable(s2HitWayIdx, io.s2_fire(1))
 
   // delete
-  val allocatableSlots =
-      RegEnable(
-        VecInit(s1_resps.map(r => !r.valid && !r.bits.u)).asUInt &
-          ~(LowerMask(UIntToOH(s1_providers(0)), TageNTables) &
-            Fill(TageNTables, s1_provideds(0).asUInt)),
-        io.s1_fire(1)
-      )
+  // val allocatableSlots =
+  //     RegEnable(
+  //       VecInit(s1_resps.map(r => !r.valid && !r.bits.u)).asUInt &
+  //         ~(LowerMask(UIntToOH(s1_providers(0)), TageNTables) &
+  //           Fill(TageNTables, s1_provideds(0).asUInt)),
+  //       io.s1_fire(1)
+  //     )
 
   tageMeta.providers(0).valid := s3Provide
   tageMeta.providers(0).bits  := s3ProvideIdx
@@ -1450,11 +1450,33 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   tageMeta.use_alt_on_na.map(_(0) := s3UseAltOnNa)
   // tageMeta.wayIdx             := s3HitWayIdx
 
-
   resp_meta := tageMeta
-
   io.out.last_stage_meta := tageMeta.asUInt
 
+  // update
+  val xupdateValid   = io.update(0).valid
+  val xupdateIn      = io.update(0).bits
+  val xupdateMeta    = (io.update(0).bits.meta).asTypeOf(new TageMeta)
+  val xupdateMispred = xupdateIn.mispred_mask(0)
+  val xupdateBrJmpValid = xupdateValid && xupdateIn.ftb_entry.brValids(0) &&
+                         !xupdateIn.ftb_entry.always_taken(0)
+  val xupdateTaken      = xupdateBrJmpValid && xupdateIn.br_taken_mask(0)
+  val xupdateGHhis      = xupdateIn.spec_info.folded_hist
+  val xupdateProvide    = xupdateMeta.providers(0).valid
+  val xupdateProvideIdx = xupdateMeta.providers(0).bits
+
+  // update altCounters
+  val updateProvideWeak = unconf(xupdateMeta.providerResps(0).ctr)
+  val updateAltDiff     = xupdateMeta.altDiffers(0)
+  val xupdateAltIdx      = use_alt_idx(xupdateIn.pc) // useAltIdx(updateIn.pc)
+  val updateOldAltCtr   = Mux1H( UIntToOH(xupdateAltIdx, altCtrsNum), altCounters )
+  val xupdateAltPred     = xupdateMeta.altPreds(0)
+  val xupdateAltCorrect  = (xupdateAltPred === xupdateTaken)
+  when(xupdateBrJmpValid && xupdateProvide && updateProvideWeak && updateAltDiff) {
+    // val newCnt = updateCtr(updateOldAltCtr, alterCtrBits, updateAltCorrect)
+    val newCnt = satUpdate(updateOldAltCtr, alterCtrBits, xupdateAltCorrect)
+    altCounters(xupdateAltIdx) := newCnt
+  }
 }
 
 
