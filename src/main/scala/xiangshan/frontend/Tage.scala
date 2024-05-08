@@ -1346,7 +1346,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
 
 
   // new tage
-  // val TickMax = ((1 << TickWidth) - 1).U
+  val TickMax = ((1 << TickWidth) - 1).U
 
   val tageMeta = WireDefault(0.U.asTypeOf(new TageMeta))
   // override val meta_size = tageMeta.getWidth
@@ -1477,6 +1477,107 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
     val newCnt = satUpdate(updateOldAltCtr, alterCtrBits, xupdateAltCorrect)
     altCounters(xupdateAltIdx) := newCnt
   }
+
+  // update
+  val updateTagePredCorrect = xupdateMeta.providerResps(0).ctr(TageCtrBits - 1) === xupdateTaken
+  val updateOldCtrIn   = WireDefault(VecInit(Seq.fill(TageNTables)(0.U(TageCtrBits.W))))
+  val updateIsUsIn     = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
+  val updateTageTaken  = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
+  val xupdateMask       = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
+  val xupdateUMask      = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
+  // allocate
+  val isTageAllocate = xupdateBrJmpValid && xupdateMispred &&
+                       !(xupdateProvide && updateTagePredCorrect && xupdateMeta.altUsed(0))
+  // val canAllocate = updateMeta.allocates(0)
+  val allocRandomMask = LFSR64()(TageNTables - 1, 0)
+  val xlongerHistoryTableMask = ~(LowerMask(UIntToOH(xupdateProvideIdx), TageNTables) &
+                                 Fill(TageNTables, xupdateProvideIdx.asUInt))
+  val xcanAllocate = xupdateMeta.allocates(0).orR //& xlongerHistoryTableMask
+  val xcanAllocMask = xupdateMeta.allocates(0) & xlongerHistoryTableMask
+  val allocTableMask = xcanAllocMask & allocRandomMask
+  val allocateIdx = Mux(xcanAllocMask(PriorityEncoder(allocTableMask)),
+                    PriorityEncoder(allocTableMask), PriorityEncoder(xcanAllocMask))
+  val updateAllocMaskIn = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
+  // tick
+  val tickCnt = RegInit(0.U(TickWidth.W))
+  val tickTopDistance = RegInit(TickMax)
+  val notAllocate = ~xcanAllocate & xlongerHistoryTableMask
+  val tickIsInc = PopCount(xcanAllocate) < PopCount(notAllocate)
+  val tickIsDec = PopCount(xcanAllocate) > PopCount(notAllocate)
+  val xtickIncVal = PopCount(notAllocate) - PopCount(xcanAllocate)
+  val xtickDecVal = PopCount(xcanAllocate) - PopCount(notAllocate)
+  val tickSetToMax = tickIsInc && (xtickIncVal >= tickTopDistance)
+  val tickSetToMin = tickIsDec && (xtickDecVal >= tickCnt)
+  val tickCntReset = WireDefault(false.B)
+
+  // update
+  when(xupdateBrJmpValid && xupdateProvide) {
+    xupdateMask(xupdateProvideIdx)        := true.B
+    updateOldCtrIn(xupdateProvideIdx)    := xupdateMeta.providerResps(0).ctr
+    updateIsUsIn(xupdateProvideIdx)      := updateTagePredCorrect
+    updateTageTaken(xupdateProvideIdx)   := xupdateTaken
+    xupdateUMask(xupdateProvideIdx)       := xupdateMeta.altDiffers(0)
+    updateAllocMaskIn(xupdateProvideIdx) := false.B
+  }
+  
+  // allocate
+  when(isTageAllocate && xcanAllocate) {
+    xupdateMask(allocateIdx)        := true.B
+    updateAllocMaskIn(allocateIdx) := true.B
+    updateTageTaken(allocateIdx)   := xupdateTaken
+    xupdateUMask(allocateIdx)       := true.B
+    updateIsUsIn(allocateIdx)      := false.B
+  }
+
+  // tick
+  when(isTageAllocate) {
+    when(tickCnt === TickMax) {
+      tickCnt := 0.U
+      tickTopDistance := TickMax
+      tickCntReset := true.B
+    }.elsewhen(tickIsInc) {
+      when(tickSetToMax) {
+        tickCnt := TickMax
+        tickTopDistance := 0.U
+      }.otherwise {
+        tickCnt := tickCnt + xtickIncVal
+        tickTopDistance := tickTopDistance - xtickIncVal
+      }
+    }.elsewhen(tickIsDec) {
+      when(tickSetToMin) {
+        tickCnt := 0.U
+        tickTopDistance := TickMax
+      }.otherwise {
+        tickCnt := tickCnt - xtickDecVal
+        tickTopDistance := tickTopDistance + xtickDecVal
+      }
+    }
+  }
+  for(a <- 0 until TageNTables) {
+    tables(a).io.update.pc          := RegNext(xupdateIn.pc)
+    tables(a).io.update.foldedHist  := RegNext(xupdateGHhis)
+    tables(a).io.update.ghist       := RegNext(xupdateIn.ghist)
+
+    tables(a).io.update.mask(0)     := RegNext(updateMask(0)(a), false.B) // RegNext(xupdateMask(a)) // 
+    tables(a).io.update.takens(0)   := RegEnable(updateTakens(0)(a), false.B, updateValids(0)) //  RegNext(updateTageTaken(a)) // 
+    tables(a).io.update.alloc(0)    := RegEnable(updateAlloc(0)(a), false.B, updateValids(0)) //RegNext(updateAllocMaskIn(a)) // 
+
+    tables(a).io.update.oldCtrs(0)  := RegNext(updateOldCtrIn(a))// dui
+
+    tables(a).io.update.uMask(0)    := RegNext(xupdateUMask(a), false.B) // RegNext(updateUMask(0)(a), false.B) //
+    tables(a).io.update.us(0)       := RegNext(updateU(0)(a), false.B) //RegNext(updateIsUsIn(a)) // 
+    tables(a).io.update.reset_u(0)  := RegNext(updateResetU(0), false.B) // RegNext(tickCntReset) //
+    tables(a).io.update.wayIdx      := DontCare //RegNext(xupdateMeta.wayIdx)
+  }
+  bt.io.updateMask(0)   := RegNext(xupdateBrJmpValid && xupdateMeta.altUsed(0)) // RegNext(baseupdate(0)) // 
+  bt.io.updateCnt(0)    := RegNext(xupdateMeta.basecnts(0)) // RegEnable(updatebcnt(0), updateValids(0)) // 
+  bt.io.updatePC        := RegNext(xupdateIn.pc) // RegEnable(update.pc, updateValids(0)) // 
+  bt.io.updateTakens(0) := RegNext(xupdateTaken) // RegEnable(bUpdateTakens(0), updateValids(0)) // 
+
+  io.s1_ready := tables.map(_.io.req.ready).reduce(_&&_) && bt.io.req.ready 
+
+
+
 }
 
 
