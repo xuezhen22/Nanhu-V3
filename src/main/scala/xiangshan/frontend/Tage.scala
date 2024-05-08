@@ -627,10 +627,11 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   val allocRandomMask = LFSR64()(TageNTables - 1, 0)
   val longerHistoryTableMask = ~(LowerMask(UIntToOH(updateProvideIdx), TageNTables) &
                                  Fill(TageNTables, updateProvideIdx.asUInt))
-  val canAllocate = updateMeta.allocates(0) & longerHistoryTableMask
-  val allocTableMask = canAllocate & allocRandomMask
-  val allocateIdx = Mux(canAllocate(PriorityEncoder(allocTableMask)),
-                    PriorityEncoder(allocTableMask), PriorityEncoder(canAllocate))
+  val canAllocate = updateMeta.allocates(0).orR
+  val canAllocMask = updateMeta.allocates(0) & longerHistoryTableMask
+  val allocTableMask = canAllocMask & allocRandomMask
+  val allocateIdx = Mux(canAllocMask(PriorityEncoder(allocTableMask)),
+                    PriorityEncoder(allocTableMask), PriorityEncoder(canAllocMask))
   val updateAllocMaskIn = WireDefault(VecInit(Seq.fill(TageNTables)(false.B)))
   // tick
   val tickCnt = RegInit(0.U(TickWidth.W))
@@ -655,7 +656,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   }
   
   // allocate
-  when(isTageAllocate && canAllocate.orR) {
+  when(isTageAllocate && canAllocate) {
     updateMask(allocateIdx)        := true.B
     updateAllocMaskIn(allocateIdx) := true.B
     updateTageTaken(allocateIdx)   := updateTaken
