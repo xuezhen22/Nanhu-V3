@@ -1491,7 +1491,7 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
   // val canAllocate = updateMeta.allocates(0)
   val allocRandomMask = LFSR64()(TageNTables - 1, 0)
   val xlongerHistoryTableMask = ~(LowerMask(UIntToOH(xupdateProvideIdx), TageNTables) &
-                                 Fill(TageNTables, xupdateProvideIdx.asUInt))
+                                 Fill(TageNTables, xupdateProvide.asUInt))
   val xcanAllocate = xupdateMeta.allocates(0).orR //& xlongerHistoryTableMask
   val xcanAllocMask = xupdateMeta.allocates(0) & xlongerHistoryTableMask
   val allocTableMask = xcanAllocMask & allocRandomMask
@@ -1558,15 +1558,14 @@ class Tage(val parentName:String = "Unknown")(implicit p: Parameters) extends Ba
     tables(a).io.update.foldedHist  := RegNext(xupdateGHhis)
     tables(a).io.update.ghist       := RegNext(xupdateIn.ghist)
 
-    tables(a).io.update.mask(0)     := RegNext(updateMask(0)(a), false.B) // RegNext(xupdateMask(a)) // 
-    tables(a).io.update.takens(0)   := RegEnable(updateTakens(0)(a), false.B, updateValids(0)) //  RegNext(updateTageTaken(a)) // 
+    tables(a).io.update.mask(0)     := RegNext(xupdateMask(a)) // RegNext(updateMask(0)(a), false.B) // 
+    tables(a).io.update.takens(0)   := RegNext(updateTageTaken(a)) // dui RegEnable(updateTakens(0)(a), false.B, updateValids(0)) //   
     tables(a).io.update.alloc(0)    := RegEnable(updateAlloc(0)(a), false.B, updateValids(0)) //RegNext(updateAllocMaskIn(a)) // 
 
     tables(a).io.update.oldCtrs(0)  := RegNext(updateOldCtrIn(a))// dui
-
-    tables(a).io.update.uMask(0)    := RegNext(xupdateUMask(a), false.B) // RegNext(updateUMask(0)(a), false.B) //
-    tables(a).io.update.us(0)       := RegNext(updateU(0)(a), false.B) //RegNext(updateIsUsIn(a)) // 
-    tables(a).io.update.reset_u(0)  := RegNext(updateResetU(0), false.B) // RegNext(tickCntReset) //
+    tables(a).io.update.uMask(0)    := RegNext(xupdateUMask(a)) // RegNext(updateUMask(0)(a), false.B) //
+    tables(a).io.update.us(0)       := RegNext(updateIsUsIn(a)) // RegNext(updateU(0)(a), false.B) //
+    tables(a).io.update.reset_u(0)  := RegNext(tickCntReset) //RegNext(updateResetU(0), false.B) // 
     tables(a).io.update.wayIdx      := DontCare //RegNext(xupdateMeta.wayIdx)
   }
   bt.io.updateMask(0)   := RegNext(xupdateBrJmpValid && xupdateMeta.altUsed(0)) // RegNext(baseupdate(0)) // 
